@@ -1,0 +1,521 @@
+================================================================================
+                    JOBETUDIANT — DOCUMENT DE CONNAISSANCE
+================================================================================
+Projet   : Plateforme emploi étudiants ↔ entreprises (Madagascar)
+Stack    : Next.js 16 · React 19 · PostgreSQL (Neon) · Prisma 7 · JWT · Tailwind v4
+Racine   : jobetudiants/
+Généré   : documentation technique globale du système
+
+================================================================================
+1. VUE D'ENSEMBLE DU SYSTÈME
+================================================================================
+
+JobEtudiant est une application web full-stack qui met en relation :
+  - des ÉTUDIANTS (consulter offres, postuler, suivre candidatures)
+  - des ENTREPRISES (publier offres, recevoir et traiter candidatures)
+
+Deux rôles distincts (enum Role) : ETUDIANT | ENTREPRISE
+Chaque compte User possède UN profil lié : Etudiant OU Entreprise (relation 1:1).
+
+Couches logicielles :
+  [Navigateur] → [Pages React / App Router] → [API Routes] → [Prisma ORM] → [PostgreSQL]
+  Services transverses : JWT (auth), Notifications (polling client), Upload fichiers
+
+Stockage fichiers (local) :
+  public/uploads/avatars/  → photos de profil
+  public/uploads/cv/       → CV (profil + candidatures)
+  Servis via API : /api/avatars/[filename] et /api/cv/[filename] (pas d'accès direct public)
+
+================================================================================
+2. ARCHITECTURE GLOBALE
+================================================================================
+
+2.1 Schéma de flux données
+--------------------------
+
+  Navigateur (client)
+       │
+       ├─ Pages protégées (/etudiant/*, /entreprise/*)
+       │     └─ proxy.ts vérifie cookie JWT + rôle
+       │
+       ├─ Pages publiques (/, /auth/*)
+       │
+       └─ fetch() → API Routes (/api/*)
+             ├─ lib/auth.ts → requireAuth() / requireRole()
+             ├─ lib/prisma.ts → base de données
+             └─ lib/*.server.ts → logique serveur (fichiers, notifs offre)
+
+2.2 Arbre des providers (côté client)
+-------------------------------------
+
+  app/layout.tsx
+    └─ providers/Providers.tsx
+         ├─ ThemeProvider        → thème clair/sombre (localStorage)
+         ├─ AuthProvider         → état utilisateur, refetch, logout
+         └─ NotificationsProvider → polling 15s, toasts, mark read
+
+2.3 Double protection des routes
+--------------------------------
+
+  Niveau 1 — src/proxy.ts (Next.js 16, remplace middleware.ts)
+    Routes publiques sans token :
+      / , /auth/* , /api/auth/* , /api/avatars/* , /api/cv/*
+    Autres routes : cookie "token" obligatoire
+    Rôle ETUDIANT requis pour /etudiant/*
+    Rôle ENTREPRISE requis pour /entreprise/*
+
+  Niveau 2 — Chaque API handler
+    lib/auth.ts : requireAuth() ou requireRole('ETUDIANT'|'ENTREPRISE')
+    Vérifie le JWT depuis le cookie httpOnly côté serveur
+
+2.4 Modèle de données (Prisma)
+------------------------------
+
+  User (1) ──(0..1)── Etudiant
+  User (1) ──(0..1)── Entreprise
+  User (1) ──(*)──── Notification
+
+  Etudiant (1) ──(*)── Candidature ──(*)── Offre (1) ──(*)── Entreprise
+
+  Modèles :
+    User         : email, password (bcrypt), role, resetToken, resetTokenExp
+    Etudiant     : nom, prenom, telephone, description, portfolio, linkedin,
+                   domaine, avatarUrl, cvUrl
+    Entreprise   : nom, secteur, description, site, telephone, adresse, avatarUrl
+    Offre        : titre, description, domaine, type, lieu, remuneration,
+                   isActive, dateFin, createdAt, updatedAt
+    Candidature  : cvUrl, message, statut (EN_ATTENTE|ACCEPTE|REFUSE)
+                   contrainte unique (etudiantId, offreId)
+    Notification : titre, message, isRead, createdAt
+
+  Enums : Role, StatutCandidature
+
+================================================================================
+3. FLUX MÉTIER GLOBAUX (INTERACTIONS SYSTÈME)
+================================================================================
+
+3.1 Visiteur non connecté
+-------------------------
+  GET / → app/page.tsx
+    → getCurrentUser() (lib/auth.ts + lib/jwt.ts)
+    → si connecté : redirect selon rôle
+    → sinon : components/landing/LandingPage.tsx
+
+3.2 Inscription
+---------------
+  LandingPage → lien /auth/register?role=ETUDIANT|ENTREPRISE
+  auth/register/RegisterForm.tsx
+    → POST /api/auth/register
+       → prisma.user.create + nested etudiant OU entreprise
+       → bcrypt.hash(password)
+       → signToken() → cookie httpOnly "token" (7 jours)
+       → prisma.notification.create (bienvenue)
+    → AuthProvider.refetch() → GET /api/auth/me
+    → redirect /etudiant/accueil ou /entreprise/dashboard
+
+3.3 Connexion
+-------------
+  auth/login/page.tsx
+    → POST /api/auth/login
+       → prisma.user.findUnique → bcrypt.compare
+       → signToken() → cookie
+       → notif "Bon retour" si absente depuis 24h
+    → refetch() → redirect selon rôle
+
+3.4 Déconnexion
+---------------
+  Navbar → AuthProvider.logout()
+    → POST /api/auth/logout → suppression cookie
+    → redirect /auth/login
+
+3.5 Mot de passe oublié
+-----------------------
+  auth/forgot-password/page.tsx
+    → POST /api/auth/forgot-password
+       → resetToken + resetTokenExp en DB
+       → lib/email.ts (Nodemailer SMTP)
+  auth/reset-password/page.tsx
+    → POST /api/auth/reset-password
+       → validation token → bcrypt.hash nouveau MDP
+
+3.6 Publication d'une offre (entreprise) + recommandation par domaine
+-------------------------------------------------------------------
+  entreprise/offres/page.tsx → OffreModal
+    → POST /api/entreprise/offres
+       → requireRole('ENTREPRISE')
+       → prisma.offre.create (avec dateFin)
+       → lib/offre.server.ts : notifyEtudiantsForNewOffre(domaine, titre, nom)
+          → prisma.etudiant.findMany WHERE domaine = offre.domaine
+          → prisma.notification.createMany pour chaque étudiant concerné
+
+  Étudiant voit l'offre :
+    etudiant/metier/page.tsx → GET /api/offres
+       → filtre isActive + dateFin non expirée (lib/offre.ts)
+
+3.7 Candidature (postuler)
+--------------------------
+  etudiant/metier/page.tsx → PostulerModal
+    → GET /api/etudiant/profil (récupère cvUrl par défaut)
+    → POST /api/etudiant/candidatures (FormData)
+       → requireRole('ETUDIANT')
+       → lib/offre.isOffreExpired() — refuse si offre expirée
+       → CV : useDefaultCv → lib/cv.server.copyCvForCandidature()
+              OU upload → lib/cv.server.validateCvFile()
+       → prisma.candidature.create
+       → prisma.notification.create → entreprise ("Nouvelle candidature")
+
+3.8 Traitement candidature (entreprise)
+---------------------------------------
+  entreprise/reception/page.tsx
+    → GET /api/entreprise/candidatures
+    → PUT /api/entreprise/candidatures/[id] { statut: ACCEPTE|REFUSE }
+       → prisma.candidature.update
+       → prisma.notification.create → étudiant
+
+3.9 Consultation CV
+-------------------
+  etudiant/demandes/page.tsx | entreprise/reception/page.tsx
+    → lib/cv.resolveCvUrl(cvUrl) → URL /api/cv/[filename]
+    → components/cv/PdfViewerModal.tsx (fetch blob → iframe, pas téléchargement)
+
+3.10 Photo de profil
+--------------------
+  etudiant/profil/page.tsx | entreprise/profil/page.tsx
+    → components/profile/AvatarUpload.tsx
+       → AvatarCropModal (recadrage canvas → blob JPEG)
+       → POST /api/*/profil/avatar (FormData)
+          → lib/avatar.server.validateAvatarFile()
+          → écriture public/uploads/avatars/
+          → lib/avatar.buildAvatarUrl() → update DB avatarUrl
+       → DELETE pour suppression
+    → ProfileAvatar → lib/avatar.resolveAvatarUrl() → GET /api/avatars/[filename]
+
+3.11 CV par défaut (profil étudiant)
+------------------------------------
+  DefaultCvUpload → POST /api/etudiant/profil/cv
+    → lib/cv.server.validateCvFile() → public/uploads/cv/ → etudiant.cvUrl
+
+3.12 Notifications (cycle complet)
+----------------------------------
+  CRÉATION (serveur) :
+    - register : bienvenue
+    - login : bon retour (si > 24h)
+    - candidature : notif entreprise
+    - statut candidature : notif étudiant
+    - nouvelle offre : notif étudiants même domaine
+
+  LECTURE (client) :
+    NotificationsProvider → GET /api/notifications toutes les 15s
+    → Navbar (badge unreadCount)
+    → */notifications/page.tsx → NotificationsContent
+    → Toast pour nouvelles non lues
+
+  ACTIONS :
+    PATCH /api/notifications/[id] → marquer lue
+    PUT /api/notifications → tout marquer lu
+
+3.13 Dashboard entreprise
+-------------------------
+  entreprise/dashboard/page.tsx → GET /api/dashboard
+    → requireRole('ENTREPRISE')
+    → agrégats : offres publiées, candidatures par statut
+
+================================================================================
+4. RÉFÉRENCES DE CODE — QUI APPELLE QUI
+================================================================================
+
+4.1 Authentification
+--------------------
+  auth/login/page.tsx
+    → hooks/useAuth → providers/AuthProvider
+    → POST /api/auth/login
+        → lib/prisma, lib/jwt.signToken, bcryptjs, cookies()
+
+  AuthProvider.tsx
+    → GET /api/auth/me
+        → lib/auth.getCurrentUser → lib/jwt.verifyToken
+
+  proxy.ts
+    → lib/jwt.verifyToken (protection routes pages)
+
+  Toutes les API protégées
+    → lib/auth.requireAuth | requireRole
+
+4.2 Offres
+----------
+  etudiant/metier/page.tsx
+    → GET /api/offres/route.ts
+    → lib/offre (formatOffreDateFin, daysUntilExpiry, isOffreExpired)
+
+  entreprise/offres/page.tsx
+    → GET/POST /api/entreprise/offres
+    → PUT/DELETE /api/entreprise/offres/[id]
+    → lib/offre.server.notifyEtudiantsForNewOffre (à la création)
+
+4.3 Candidatures
+----------------
+  etudiant/metier/page.tsx
+    → POST /api/etudiant/candidatures
+        → lib/cv.server (validateCvFile, copyCvForCandidature)
+
+  entreprise/reception/page.tsx
+    → GET /api/entreprise/candidatures
+    → PUT /api/entreprise/candidatures/[id]
+
+  etudiant/demandes/page.tsx
+    → GET /api/etudiant/candidatures
+    → PdfViewerModal + lib/cv.resolveCvUrl
+
+4.4 Fichiers (avatars / CV)
+---------------------------
+  AvatarUpload
+    → POST api/etudiant|entreprise/profil/avatar
+        → lib/avatar.server + lib/avatar.buildAvatarUrl + lib/prisma
+
+  DefaultCvUpload
+    → POST api/etudiant/profil/cv
+        → lib/cv.server + lib/prisma
+
+  Affichage
+    → lib/avatar.resolveAvatarUrl → GET api/avatars/[filename]
+    → lib/cv.resolveCvUrl → GET api/cv/[filename]
+
+4.5 Notifications
+-------------------
+  NotificationsProvider
+    → AuthProvider (user.id pour polling)
+    → GET/PATCH/PUT /api/notifications/*
+    → lib/notifications (formatRelativeTime, groupNotifications, getNotificationLink)
+    → components/ui/Toast
+
+  Navbar
+    → useAuth + useNotifications (badge)
+
+================================================================================
+5. INVENTAIRE DES FICHIERS ET UTILITÉ
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+5.1 RACINE PROJET
+────────────────────────────────────────────────────────────────────────────────
+package.json          Scripts npm (dev, build, seed, db:sync)
+prisma.config.ts        Config Prisma 7 — URL base de données (hors schema.prisma)
+next.config.ts          Configuration Next.js
+.env                    DATABASE_URL, JWT_SECRET, SMTP (non versionné)
+.env.example            Modèle variables d'environnement
+
+────────────────────────────────────────────────────────────────────────────────
+5.2 prisma/
+────────────────────────────────────────────────────────────────────────────────
+schema.prisma           Modèles, enums, relations PostgreSQL
+seed.ts                 Données test : etudiant@test.mg, entreprise@test.mg, offres
+backfill-datefin.ts     Remplit dateFin (+90j) sur offres sans date — npm run db:sync
+migrations/             Historique SQL migrations
+
+────────────────────────────────────────────────────────────────────────────────
+5.3 src/app/ — PAGES ET LAYOUTS
+────────────────────────────────────────────────────────────────────────────────
+page.tsx                Accueil : redirect si connecté, sinon LandingPage
+layout.tsx              Layout racine HTML + Providers + globals.css
+globals.css             Tokens CSS, thème clair/sombre, mesh-bg, variables couleurs
+
+auth/layout.tsx         Layout split-screen pages authentification
+auth/login/page.tsx     Formulaire connexion
+auth/register/page.tsx  Wrapper Suspense autour RegisterForm
+auth/register/RegisterForm.tsx  Formulaire inscription (rôle depuis ?role=)
+auth/forgot-password/page.tsx   Demande reset mot de passe
+auth/reset-password/page.tsx    Nouveau mot de passe via token URL
+
+etudiant/layout.tsx     Layout espace étudiant + Navbar
+etudiant/accueil/page.tsx       Page d'accueil étudiant (liens rapides)
+etudiant/metier/page.tsx        Liste offres, filtres, modal postuler
+etudiant/demandes/page.tsx      Historique candidatures + viewer PDF
+etudiant/profil/page.tsx        Profil, avatar, CV par défaut
+etudiant/notifications/page.tsx Notifications étudiant
+
+entreprise/layout.tsx   Layout espace entreprise + Navbar
+entreprise/dashboard/page.tsx   Statistiques offres/candidatures
+entreprise/offres/page.tsx      CRUD offres (modal création/édition)
+entreprise/reception/page.tsx   Boîte réception, accepter/refuser
+entreprise/profil/page.tsx      Profil entreprise + avatar
+entreprise/notifications/page.tsx  Notifications entreprise
+
+────────────────────────────────────────────────────────────────────────────────
+5.4 src/app/api/ — ROUTES API (22 endpoints)
+────────────────────────────────────────────────────────────────────────────────
+
+AUTH
+  api/auth/register/route.ts      POST — créer compte + profil + cookie JWT
+  api/auth/login/route.ts         POST — vérifier MDP + cookie + notif retour
+  api/auth/logout/route.ts        POST — supprimer cookie token
+  api/auth/me/route.ts            GET — user courant + profil depuis JWT
+  api/auth/forgot-password/route.ts POST — token reset + email SMTP
+  api/auth/reset-password/route.ts  POST — valider token + nouveau MDP
+
+OFFRES PUBLIQUES
+  api/offres/route.ts             GET — offres actives non expirées (étudiants)
+  api/offres/[id]/route.ts        GET — détail une offre
+
+ÉTUDIANT
+  api/etudiant/profil/route.ts           GET/PUT — profil étudiant
+  api/etudiant/profil/avatar/route.ts  POST/DELETE — avatar
+  api/etudiant/profil/cv/route.ts      POST/DELETE — CV par défaut
+  api/etudiant/candidatures/route.ts   GET/POST — lister / créer candidature
+
+ENTREPRISE
+  api/entreprise/profil/route.ts              GET/PUT — profil entreprise
+  api/entreprise/profil/avatar/route.ts       POST/DELETE — avatar
+  api/entreprise/offres/route.ts              GET/POST — offres de l'entreprise
+  api/entreprise/offres/[id]/route.ts         PUT/DELETE — modifier/supprimer offre
+  api/entreprise/candidatures/route.ts        GET — toutes candidatures reçues
+  api/entreprise/candidatures/[id]/route.ts   PUT — changer statut + notif étudiant
+  api/dashboard/route.ts                      GET — stats dashboard (entreprise)
+
+NOTIFICATIONS
+  api/notifications/route.ts      GET liste + PUT tout marquer lu
+  api/notifications/[id]/route.ts PATCH marquer une notification lue
+
+FICHIERS
+  api/avatars/[filename]/route.ts GET — servir image avatar
+  api/cv/[filename]/route.ts      GET — servir PDF CV (Content-Disposition inline)
+
+────────────────────────────────────────────────────────────────────────────────
+5.5 src/components/
+────────────────────────────────────────────────────────────────────────────────
+landing/LandingPage.tsx         Page marketing publique, CTA inscription par rôle
+layout/Navbar.tsx               Navigation, badge notifs, logout, ThemeToggle
+layout/AuthThemeToggle.tsx      Toggle thème sur pages auth
+notifications/NotificationsContent.tsx  Liste groupée, actions lire/tout lire
+profile/AvatarUpload.tsx        Orchestration upload/crop/suppression avatar
+profile/AvatarCropModal.tsx     Modal recadrage image (canvas → JPEG)
+profile/DefaultCvUpload.tsx     Upload/suppression CV par défaut
+profile/ProfileAvatar.tsx       Affichage avatar image ou initiales
+profile/SectionCard.tsx         Carte section formulaire profil
+cv/PdfViewerModal.tsx           Visionneuse PDF en modal (blob URL)
+ui/Button.tsx                   Bouton réutilisable
+ui/Input.tsx                    Champ input avec label
+ui/Alert.tsx                    Alertes success/error
+ui/Toast.tsx                    Notification toast flottante
+ui/ThemeToggle.tsx              Bouton bascule clair/sombre
+
+────────────────────────────────────────────────────────────────────────────────
+5.6 src/providers/
+────────────────────────────────────────────────────────────────────────────────
+Providers.tsx             Compose Theme → Auth → Notifications
+ThemeProvider.tsx         État thème, localStorage, classe .dark sur <html>
+AuthProvider.tsx          Contexte user, loading, logout(), refetch()
+NotificationsProvider.tsx Polling 15s, unreadCount, markRead, toasts
+
+────────────────────────────────────────────────────────────────────────────────
+5.7 src/hooks/
+────────────────────────────────────────────────────────────────────────────────
+useAuth.ts                Réexporte useAuth depuis AuthProvider
+useNotifications.ts       Réexporte useNotifications depuis NotificationsProvider
+useTheme.ts               Réexporte useTheme depuis ThemeProvider
+
+────────────────────────────────────────────────────────────────────────────────
+5.8 src/lib/ — LOGIQUE MÉTIER ET UTILITAIRES
+────────────────────────────────────────────────────────────────────────────────
+prisma.ts         Singleton client Prisma (adapter PostgreSQL)
+jwt.ts            signToken(), verifyToken() — JWT 7 jours, payload { id, email, role }
+auth.ts           getCurrentUser(), requireAuth(), requireRole() — serveur
+email.ts          Envoi emails via Nodemailer (reset password)
+utils.ts          cn() — fusion classes Tailwind (clsx + tailwind-merge)
+
+avatar.ts         resolveAvatarUrl(), buildAvatarUrl() — côté client/URL
+avatar.server.ts  validateAvatarFile(), deleteAvatarFile() — côté serveur uniquement
+
+cv.ts             resolveCvUrl() — construit URL API pour affichage
+cv.client.ts      getCvDisplayName() — nom fichier affiché
+cv.server.ts      validateCvFile(), copyCvForCandidature(), deleteCvFile(),
+                  buildCvStoragePath() — côté serveur
+
+offre.ts          isOffreExpired(), isOffreActive(), formatOffreDateFin(),
+                  daysUntilExpiry(), getDefaultDateFinInputValue()
+offre.server.ts   notifyEtudiantsForNewOffre() — recommandation par domaine
+
+notifications.ts  formatRelativeTime(), groupNotifications(),
+                  getNotificationLink(), getNotificationKind() — helpers UI
+
+────────────────────────────────────────────────────────────────────────────────
+5.9 src/ — AUTRES
+────────────────────────────────────────────────────────────────────────────────
+proxy.ts          Protection routes Next.js 16 (équivalent middleware)
+types/index.ts    Role, StatutCandidature, ApiResponse<T>
+
+────────────────────────────────────────────────────────────────────────────────
+5.10 public/
+────────────────────────────────────────────────────────────────────────────────
+uploads/avatars/  Stockage images profil (écriture serveur)
+uploads/cv/       Stockage PDF CV (écriture serveur)
+
+================================================================================
+6. DIAGRAMME DES INTERACTIONS PRINCIPALES
+================================================================================
+
+                    ┌─────────────────────────────────────┐
+                    │           LandingPage /             │
+                    │     auth/login | register           │
+                    └──────────────┬──────────────────────┘
+                                   │ cookie JWT
+                    ┌──────────────▼──────────────────────┐
+                    │         proxy.ts (rôle)             │
+                    └──────────────┬──────────────────────┘
+           ┌───────────────────────┼───────────────────────┐
+           ▼                       ▼                       ▼
+    /etudiant/*              /entreprise/*            /api/*
+    metier (offres)          offres (CRUD)          requireRole
+    demandes                 reception              prisma
+    profil (avatar,cv)       dashboard
+           │                       │
+           └───────────┬───────────┘
+                       ▼
+              ┌─────────────────┐
+              │   PostgreSQL    │
+              │ User·Etudiant   │
+              │ Offre·Candidature│
+              │ Notification    │
+              └─────────────────┘
+
+================================================================================
+7. ÉVÉNEMENTS QUI CRÉENT DES NOTIFICATIONS
+================================================================================
+
+  Événement                          │ Destinataire    │ Fichier source
+  -----------------------------------|-----------------|---------------------------
+  Inscription                        │ utilisateur     │ api/auth/register
+  Connexion (après 24h absence)      │ utilisateur     │ api/auth/login
+  Nouvelle candidature               │ entreprise      │ api/etudiant/candidatures
+  Candidature acceptée/refusée       │ étudiant        │ api/entreprise/candidatures/[id]
+  Nouvelle offre (même domaine)     │ étudiants       │ lib/offre.server.ts
+
+================================================================================
+8. COMMANDES UTILES
+================================================================================
+
+  npm run dev          Serveur développement (http://localhost:3000)
+  npm run build        Build production
+  npm run seed         Comptes et offres de test
+  npm run db:sync      prisma db push + generate + backfill dateFin
+  npx prisma studio    Interface visuelle base de données
+
+  Comptes test :
+    etudiant@test.mg / password123
+    entreprise@test.mg / password123
+
+================================================================================
+9. POINTS TECHNIQUES IMPORTANTS
+================================================================================
+
+  - Prisma 7 : DATABASE_URL dans prisma.config.ts, pas dans schema.prisma
+  - Next.js 16 : proxy.ts (pas middleware.ts) pour protection routes
+  - JWT en cookie httpOnly "token" — non accessible en JavaScript client
+  - Séparation client/serveur : *.server.ts pour code Node (fs, validation fichiers)
+  - avatar.ts / cv.ts = URLs côté client ; avatar.server.ts / cv.server.ts = disque
+  - Une candidature = un CV copié ou uploadé (cvUrl sur Candidature, pas seulement profil)
+  - Recommandation = matching domaine offre ↔ domaine étudiant (pas d'IA)
+  - dateFin null = offre sans expiration ; backfill met +90j sur anciennes offres
+
+================================================================================
+                              FIN DU DOCUMENT
+================================================================================
