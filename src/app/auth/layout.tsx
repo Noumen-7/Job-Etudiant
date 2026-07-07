@@ -1,6 +1,7 @@
 import { ReactNode } from 'react'
 import { GraduationCap } from 'lucide-react'
 import { AuthThemeToggle } from '@/components/layout/AuthThemeToggle'
+import { AuthPresentation } from '@/components/layout/AuthPresentation'
 
 export default function AuthLayout({ children }: { children: ReactNode }) {
   return (
@@ -20,25 +21,11 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
             <span className="font-bold text-2xl">JobEtudiant</span>
           </div>
         </div>
-        <div className="relative space-y-6">
-          <h2 className="text-3xl xl:text-4xl font-extrabold leading-tight">
-            Votre avenir professionnel commence ici
-          </h2>
-          <p className="text-emerald-100/80 text-lg leading-relaxed max-w-md">
-            Rejoignez la communauté qui connecte les étudiants malgaches aux meilleures opportunités d&apos;emploi, stages et missions.
-          </p>
-          <div className="flex gap-6 pt-4">
-            <div>
-              <p className="text-2xl font-bold">2 500+</p>
-              <p className="text-sm text-emerald-200/70">Étudiants</p>
-            </div>
-            <div className="w-px bg-white/20" />
-            <div>
-              <p className="text-2xl font-bold">180+</p>
-              <p className="text-sm text-emerald-200/70">Entreprises</p>
-            </div>
-          </div>
-        </div>
+       <div className="relative space-y-6">
+
+  <AuthPresentation />
+
+</div>
         <p className="relative text-sm text-emerald-200/50">© JobEtudiant — Madagascar</p>
       </div>
 
@@ -51,8 +38,10 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
               </div>
               <span className="font-bold text-2xl text-fg">Job<span className="text-emerald-600">Etudiant</span></span>
             </div>
-            <p className="text-fg-secondary text-sm">La plateforme emploi pour les étudiants malgaches</p>
-          </div>
+<p className="text-fg-secondary text-sm">
+  La plateforme emploi pour les étudiants malgaches
+</p>
+        </div>
           <div className="card rounded-2xl shadow-xl shadow-emerald-900/5 dark:shadow-black/20 p-8 sm:p-10">
             {children}
           </div>
