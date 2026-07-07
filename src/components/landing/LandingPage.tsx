@@ -1,5 +1,7 @@
+'use client'
 import Link from 'next/link'
 import { ThemeToggle } from '@/components/ui/ThemeToggle'
+import { useLanguage } from '@/providers/LanguageProvider'
 import {
   ArrowRight,
   Briefcase,
@@ -20,6 +22,7 @@ const stats = [
   { value: '850+', label: 'Offres publiées' },
   { value: '92%', label: 'Satisfaction' },
 ]
+
 
 const features = [
   {
@@ -61,6 +64,13 @@ const steps = [
 ]
 
 export function LandingPage() {
+   const {
+    language,
+    changeLanguage, 
+    t
+  } = useLanguage()
+  
+
   return (
     <div className="min-h-screen mesh-bg">
       {/* Navigation */}
@@ -75,23 +85,72 @@ export function LandingPage() {
             </span>
           </Link>
           <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-fg-secondary">
-            <a href="#fonctionnalites" className="hover:text-emerald-700 transition-colors">Fonctionnalités</a>
-            <a href="#comment-ca-marche" className="hover:text-emerald-700 transition-colors">Comment ça marche</a>
-            <a href="#pour-qui" className="hover:text-emerald-700 transition-colors">Pour qui ?</a>
-          </nav>
+
+  <a
+    href="#fonctionnalites"
+    className="hover:text-emerald-700 transition-colors"
+  >
+    {language === "fr"
+      ? "Fonctionnalités"
+      : "Fampiasa"
+    }
+  </a>
+
+
+  <a
+    href="#comment-ca-marche"
+    className="hover:text-emerald-700 transition-colors"
+  >
+    {language === "fr"
+      ? "Comment ça marche"
+      : "Ahoana ny fiasany"
+    }
+  </a>
+
+
+  <a
+    href="#pour-qui"
+    className="hover:text-emerald-700 transition-colors"
+  >
+    {language === "fr"
+      ? "Pour qui ?"
+      : "Ho an'iza ?"
+    }
+  </a>
+
+</nav>
           <div className="flex items-center gap-2 sm:gap-3">
+              <button
+    type="button"
+    onClick={() =>
+      changeLanguage(
+        language === "fr"
+          ? "mg"
+          : "fr"
+      )
+    }
+    className="px-3 py-2 rounded-lg text-sm font-semibold hover:bg-nav-hover-bg transition"
+  >
+
+    {
+      language === "fr"
+        ? "🇫🇷 FR"
+        : "🇲🇬 MG"
+    }
+
+  </button>
             <ThemeToggle />
             <Link
               href="/auth/login"
               className="hidden sm:inline-flex px-4 py-2 text-sm font-semibold text-fg-secondary hover:text-emerald-700 transition-colors"
             >
-              Connexion
+              {t.common.login}
             </Link>
             <Link
               href="/auth/register"
               className="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold text-white bg-emerald-600 rounded-xl hover:bg-emerald-700 shadow-md shadow-emerald-600/20 transition-all hover:shadow-lg hover:shadow-emerald-600/30"
             >
-              Commencer <ArrowRight size={15} />
+              {t.common.start} <ArrowRight size={15} />
             </Link>
           </div>
         </div>
@@ -106,16 +165,16 @@ export function LandingPage() {
           <div className="max-w-3xl">
             <div className="animate-fade-up inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-accent-soft text-accent-soft-fg text-sm font-medium mb-6 border border-border">
               <Sparkles size={14} />
-              La référence emploi-étudiant à Madagascar
+                {language === "fr"
+                  ? "La référence emploi-étudiant à Madagascar"
+                  : "Ny sehatra voalohany ho an'ny asa ho an'ny mpianatra eto Madagasikara"
+                }
             </div>
             <h1 className="animate-fade-up delay-100 text-4xl sm:text-5xl lg:text-6xl font-extrabold text-fg leading-[1.1] tracking-tight">
-              Votre premier pas vers{' '}
-              <span className="text-gradient">l&apos;emploi</span>
-              {' '}commence ici
+              {t.landing.title}
             </h1>
             <p className="animate-fade-up delay-200 mt-6 text-lg sm:text-xl text-fg-secondary leading-relaxed max-w-2xl">
-              JobEtudiant connecte les talents malgaches aux entreprises qui recrutent.
-              Stages, CDD, missions freelance — trouvez votre opportunité ou recrutez les profils de demain.
+            {t.landing.subtitle}
             </p>
             <div className="animate-fade-up delay-300 mt-10 flex flex-col sm:flex-row gap-4">
             <Link
@@ -123,14 +182,20 @@ export function LandingPage() {
               className="inline-flex items-center justify-center gap-2 px-7 py-3.5 bg-emerald-600 text-white font-semibold rounded-xl hover:bg-emerald-700 shadow-lg shadow-emerald-600/25 transition-all hover:shadow-xl hover:shadow-emerald-600/30 hover:-translate-y-0.5"
             >
               <GraduationCap size={20} />
-              Je suis étudiant
+             {language === "fr"
+                ? "Je suis étudiant"
+                : "Mpianatra aho"
+}
             </Link>
             <Link
               href="/auth/register?role=entreprise"
               className="inline-flex items-center justify-center gap-2 px-7 py-3.5 bg-surface text-accent-soft-fg font-semibold rounded-xl border-2 border-border hover:border-emerald-400 hover:bg-muted transition-all hover:-translate-y-0.5"
             >
                 <Building2 size={20} />
-                Je recrute
+               {language === "fr"
+                    ? "Je recrute"
+                    : "Mitady mpiasa aho"
+                  }
               </Link>
             </div>
           </div>
@@ -167,12 +232,32 @@ export function LandingPage() {
                       </div>
                     ))}
                   </div>
-                  <p className="text-xs text-fg-secondary"><span className="font-semibold text-emerald-600">+24</span> candidatures aujourd&apos;hui</p>
-                </div>
+                <p className="text-xs text-fg-secondary">
+
+  <span className="font-semibold text-emerald-600">
+    +24
+  </span>
+
+  {
+    language === "fr"
+      ? " candidatures aujourd'hui"
+      : " fangatahana androany"
+  }
+
+</p>
               </div>
-              <div className="absolute -bottom-4 -left-4 bg-emerald-600 text-white px-4 py-2 rounded-xl shadow-lg text-sm font-semibold flex items-center gap-2">
-                <CheckCircle2 size={16} /> Candidature acceptée !
               </div>
+            <div className="absolute -bottom-4 -left-4 bg-emerald-600 text-white px-4 py-2 rounded-xl shadow-lg text-sm font-semibold flex items-center gap-2">
+
+  <CheckCircle2 size={16} />
+
+  {
+    language === "fr"
+      ? "Candidature acceptée !"
+      : "Voaray ny fangatahana !"
+  }
+
+</div>
             </div>
           </div>
         </div>
