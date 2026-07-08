@@ -112,3 +112,174 @@ model Notification {
   isRead    Boolean  @default(false)
   createdAt DateTime @default(now())
 }
+
+
+//** VOICI LE CONTENU DU SCHEME.PRISMA POUR ACTIVER LA NOTIFICATION EN TEMPS REEL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ETUDIANT
+  ENTREPRISE
+}
+
+enum StatutCandidature {
+  EN_ATTENTE
+  ACCEPTE
+  REFUSE
+}
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  password      String
+  role          Role
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  etudiant      Etudiant?
+  entreprise    Entreprise?
+
+  resetToken    String?
+  resetTokenExp DateTime?
+
+  notifications Notification[]
+}
+
+model Etudiant {
+  id           String        @id @default(cuid())
+  userId       String        @unique
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  nom          String
+  prenom       String
+  telephone    String?
+  description  String?
+  portfolio    String?
+  linkedin     String?
+  domaine      String?
+  avatarUrl    String?
+  cvUrl        String?
+
+  candidatures Candidature[]
+  competences  Competence[]   // Relation Many-to-Many
+  conversations ConversationParticipant[]
+  messages      Message[]
+  notifications Notification[]
+}
+
+model Entreprise {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  nom           String
+  secteur       String?
+  description   String?
+  site          String?
+  telephone     String?
+  adresse       String?
+  avatarUrl     String?
+
+  offres        Offre[]
+  conversations ConversationParticipant[]
+  messages      Message[]
+}
+
+model Offre {
+  id           String        @id @default(cuid())
+  entrepriseId String
+  entreprise   Entreprise    @relation(fields: [entrepriseId], references: [id], onDelete: Cascade)
+  titre        String
+  description  String
+  domaine      String
+  type         String
+  lieu         String?
+  remuneration String?
+  isActive     Boolean       @default(true)
+  dateFin      DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  
+  candidatures Candidature[]
+  competences  Competence[]  // Relation Many-to-Many
+}
+
+model Candidature {
+  id         String            @id @default(cuid())
+  etudiantId String
+  etudiant   Etudiant          @relation(fields: [etudiantId], references: [id], onDelete: Cascade)
+  offreId    String
+  offre      Offre             @relation(fields: [offreId], references: [id], onDelete: Cascade)
+
+  cvUrl      String
+  message    String?
+  statut     StatutCandidature @default(EN_ATTENTE)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  @@unique([etudiantId, offreId])
+}
+
+model Notification {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  titre      String
+  message    String
+  isRead     Boolean   @default(false)
+  etudiantId String?
+  etudiant   Etudiant? @relation(fields: [etudiantId], references: [id], onDelete: Cascade)
+  createdAt  DateTime  @default(now())
+}
+
+model Competence {
+  id        String     @id @default(uuid())
+  nom       String     @unique
+  etudiants Etudiant[]
+  offres    Offre[]
+}
+
+// --- SYSTÈME DE CHAT ---
+
+model Conversation {
+  id           String                    @id @default(uuid())
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+  participants ConversationParticipant[]
+  messages     Message[]
+}
+
+model ConversationParticipant {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  
+  etudiantId     String?
+  etudiant       Etudiant?    @relation(fields: [etudiantId], references: [id])
+  entrepriseId   String?
+  entreprise     Entreprise?  @relation(fields: [entrepriseId], references: [id])
+
+  @@unique([conversationId, etudiantId])
+  @@unique([conversationId, entrepriseId])
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  contenu        String
+  createdAt      DateTime     @default(now())
+  
+  etudiantId     String?
+  etudiant       Etudiant?    @relation(fields: [etudiantId], references: [id])
+  entrepriseId   String?
+  entreprise     Entreprise?  @relation(fields: [entrepriseId], references: [id])
+}
+**/
